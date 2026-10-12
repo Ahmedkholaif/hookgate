@@ -1,0 +1,35 @@
+# Postgres + hookgate split into an API and two worker replicas.
+# Pick a broker with an override file (see the Makefile):
+#   docker compose -f compose.yaml -f compose.rabbitmq.yaml up --build
+#   docker compose -f compose.yaml -f compose.sqs.yaml up --build
+#   docker compose -f compose.yaml -f compose.pubsub.yaml up --build
+x-hookgate: &hookgate
+  build: .
+  restart: unless-stopped
+  environment: &env
+    DATABASE_URL: postgres://postgres:postgres@postgres:5432/hookgate?sslmode=disable
+    SINK_TOPICS: billing,crm,audit
+    CHAOS_FAIL_TYPES: payment.flaky
+    MAX_ATTEMPTS: "4"
+    RETRY_BASE_MS: "500"
+  depends_on:
+    postgres: { condition: service_healthy }
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: hookgate }
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      retries: 30
+
+  api:
+    <<: *hookgate
+    environment: { <<: *env, ROLES: api }
+    ports: ["${API_PORT:-8080}:8080"]
+
+  worker:
+    <<: *hookgate
+    environment: { <<: *env, ROLES: "relay,processor,sink" }
+    deploy: { replicas: 2 }

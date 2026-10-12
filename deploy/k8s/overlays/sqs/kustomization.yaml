@@ -1,0 +1,29 @@
+# Same deployment on SQS (ElasticMQ in-cluster; point SQS_ENDPOINT at nothing
+# and drop elasticmq.yaml to use real AWS SQS with IRSA credentials).
+#   kubectl apply -k deploy/k8s/overlays/sqs
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hookgate
+resources:
+  - ../../base
+  - elasticmq.yaml
+configMapGenerator:
+  - name: hookgate
+    behavior: merge
+    literals:
+      - BROKER=sqs
+      - SQS_ENDPOINT=http://elasticmq:9324
+      - AWS_REGION=us-east-1
+patches:
+  - target: { kind: Deployment, name: rabbitmq }
+    patch: |
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: rabbitmq }
+  - target: { kind: Service, name: rabbitmq }
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata: { name: rabbitmq }

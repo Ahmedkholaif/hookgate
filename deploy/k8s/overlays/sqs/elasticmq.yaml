@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elasticmq
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: elasticmq } }
+  template:
+    metadata: { labels: { app: elasticmq } }
+    spec:
+      containers:
+        - name: elasticmq
+          image: softwaremill/elasticmq-native
+          ports: [{ containerPort: 9324 }]
+          readinessProbe: { tcpSocket: { port: 9324 }, periodSeconds: 3 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticmq
+spec:
+  selector: { app: elasticmq }
+  ports: [{ port: 9324 }]

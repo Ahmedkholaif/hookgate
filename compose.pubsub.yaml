@@ -1,0 +1,8 @@
+services:
+  pubsub:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=hookgate-local
+    ports: ["8085:8085"]
+  worker:
+    environment: { BROKER: pubsub, PUBSUB_EMULATOR_HOST: "pubsub:8085", PUBSUB_PROJECT: hookgate-local }
+    depends_on: [pubsub]

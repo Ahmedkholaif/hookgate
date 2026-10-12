@@ -1,0 +1,29 @@
+# hookgate on Kubernetes (RabbitMQ by default; see ../overlays/sqs).
+#   kubectl apply -k deploy/k8s/base
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hookgate
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - rabbitmq.yaml
+  - hookgate.yaml
+configMapGenerator:
+  - name: hookgate
+    literals:
+      - BROKER=rabbitmq
+      - AMQP_URL=amqp://guest:guest@rabbitmq:5672/
+      - EVENTS_TOPIC=hookgate-events
+      - SINK_TOPICS=billing,crm,audit
+      - CHAOS_FAIL_TYPES=payment.flaky
+      - MAX_ATTEMPTS=4
+      - RETRY_BASE_MS=500
+secretGenerator:
+  - name: hookgate
+    literals:
+      # Demo only: use a managed database and a real secret store in production.
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/hookgate?sslmode=disable
+images:
+  - name: hookgate
+    newName: hookgate
+    newTag: dev

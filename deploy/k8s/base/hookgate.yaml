@@ -1,0 +1,68 @@
+# The API and the workers are separate Deployments from the same image, so
+# each scales on its own signal: request rate for the API, backlog for workers.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hookgate-api
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: hookgate-api } }
+  template:
+    metadata: { labels: { app: hookgate-api } }
+    spec:
+      containers:
+        - name: hookgate
+          image: hookgate
+          imagePullPolicy: IfNotPresent
+          env: [{ name: ROLES, value: api }]
+          envFrom: [{ configMapRef: { name: hookgate } }, { secretRef: { name: hookgate } }]
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 3 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 10, failureThreshold: 6 }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hookgate-api
+spec:
+  selector: { app: hookgate-api }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hookgate-worker
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: hookgate-worker } }
+  template:
+    metadata: { labels: { app: hookgate-worker } }
+    spec:
+      terminationGracePeriodSeconds: 45 # workers drain in-flight messages on SIGTERM
+      containers:
+        - name: hookgate
+          image: hookgate
+          imagePullPolicy: IfNotPresent
+          env: [{ name: ROLES, value: "relay,processor,sink" }]
+          envFrom: [{ configMapRef: { name: hookgate } }, { secretRef: { name: hookgate } }]
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 10, failureThreshold: 6 }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 256Mi }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hookgate-worker
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: hookgate-worker }
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }

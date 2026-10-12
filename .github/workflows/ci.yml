@@ -1,0 +1,95 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: hookgate_test }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test -p 1 -race -count=1 -v ./...
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/hookgate_test?sslmode=disable
+
+  # The broker conformance suite plus a full pipeline smoke test on each real broker.
+  broker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        broker: [rabbitmq, sqs, pubsub]
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: hookgate }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 20
+    env:
+      BROKER: ${{ matrix.broker }}
+      AMQP_URL: amqp://guest:guest@localhost:5672/
+      SQS_ENDPOINT: http://localhost:9324
+      PUBSUB_EMULATOR_HOST: localhost:8085
+      PUBSUB_PROJECT: hookgate-local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: start ${{ matrix.broker }}
+        run: |
+          case "$BROKER" in
+            rabbitmq) docker run -d --user rabbitmq -p 5672:5672 rabbitmq:4-management-alpine
+                      until nc -z localhost 5672; do sleep 1; done; sleep 5 ;;
+            sqs)      docker run -d -p 9324:9324 softwaremill/elasticmq-native
+                      until nc -z localhost 9324; do sleep 1; done ;;
+            pubsub)   docker run -d -p 8085:8085 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+                        gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=hookgate-local
+                      until curl -sf localhost:8085 >/dev/null; do sleep 1; done ;;
+          esac
+      - run: BROKER_TEST=$BROKER go test -count=1 -v ./internal/broker/
+      - name: pipeline smoke test (1 api + 2 worker processes)
+        run: |
+          go build -o hookgate ./cmd/hookgate
+          export DATABASE_URL=postgres://postgres:postgres@localhost:5432/hookgate?sslmode=disable
+          export SINK_TOPICS=billing,crm,audit CHAOS_FAIL_TYPES=payment.flaky MAX_ATTEMPTS=3 RETRY_BASE_MS=200
+          ROLES=api ADDR=:8080 ./hookgate > api.log 2>&1 &
+          ROLES=relay,processor,sink ADDR=:8081 ./hookgate > w1.log 2>&1 &
+          ROLES=relay,processor,sink ADDR=:8082 ./hookgate > w2.log 2>&1 &
+          until curl -sf localhost:8080/healthz >/dev/null; do sleep 1; done
+          scripts/smoke.sh http://localhost:8080
+      - if: failure()
+        run: tail -n 50 *.log
+
+  # Deploy the manifests to a real cluster and run the smoke test through the Service.
+  k8s:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [deploy/k8s/base, deploy/k8s/overlays/sqs]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: helm/kind-action@v1
+        with: { cluster_name: hookgate }
+      - run: docker build -t hookgate:dev . && kind load docker-image hookgate:dev --name hookgate
+      - run: |
+          kubectl apply -k ${{ matrix.target }}
+          kubectl -n hookgate rollout status statefulset/postgres --timeout=240s
+          kubectl -n hookgate rollout status deploy --timeout=300s
+      - run: |
+          kubectl -n hookgate port-forward svc/hookgate-api 8080:8080 > pf.log 2>&1 &
+          until curl -sf localhost:8080/healthz >/dev/null; do sleep 1; done
+          scripts/smoke.sh http://localhost:8080
+      - if: failure()
+        run: |
+          kubectl -n hookgate get pods -o wide
+          kubectl -n hookgate logs deploy/hookgate-worker --tail=50 || true
+          kubectl -n hookgate logs deploy/hookgate-api --tail=50 || true

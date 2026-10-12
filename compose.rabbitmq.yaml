@@ -1,0 +1,12 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    user: rabbitmq # avoids an .erlang.cookie permission error on some hosts
+    ports: ["5672:5672", "15672:15672"] # management UI: http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 3s
+      retries: 40
+  worker:
+    environment: { BROKER: rabbitmq, AMQP_URL: "amqp://guest:guest@rabbitmq:5672/" }
+    depends_on: { rabbitmq: { condition: service_healthy } }
