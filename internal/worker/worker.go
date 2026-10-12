@@ -83,6 +83,31 @@ func (r *Relay) Tick(ctx context.Context) (int, error) {
 	return len(items), r.st.MarkPublished(mctx, items, r.b.Name(), actor("relay"))
 }
 
+// ----------------------------------------------------------------- janitor
+
+// Janitor prunes old status-log and inbox rows (see store.Prune). It runs
+// alongside the relay; an advisory lock keeps it to one process at a time.
+type Janitor struct {
+	St        *store.Store
+	Retention time.Duration
+	Every     time.Duration
+	Log       *slog.Logger
+}
+
+func (j *Janitor) Run(ctx context.Context) {
+	for {
+		if sleep(ctx, j.Every); ctx.Err() != nil {
+			return
+		}
+		n, err := j.St.Prune(ctx, j.Retention)
+		if err != nil && ctx.Err() == nil {
+			j.Log.Error("prune", "err", err)
+		} else if n > 0 {
+			j.Log.Info("pruned old rows", "rows", n, "retention", j.Retention)
+		}
+	}
+}
+
 // -------------------------------------------------------------- processor
 
 type ProcessorConfig struct {

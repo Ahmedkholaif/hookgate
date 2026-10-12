@@ -755,3 +755,41 @@ func truncate(s string, n int) string {
 	}
 	return s[:n]
 }
+
+// pruneLockID makes sure only one process prunes at a time.
+const pruneLockID = 727_300_002
+
+// Prune deletes status-log entries and inbox rows older than retention, in
+// small batches so it never holds long locks. Events and messages themselves
+// are kept. An inbox row only matters while its message could still be
+// redelivered, which no broker keeps doing for days.
+func (s *Store) Prune(ctx context.Context, retention time.Duration) (int64, error) {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Release()
+	var locked bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, pruneLockID).Scan(&locked); err != nil || !locked {
+		return 0, err
+	}
+	defer conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, pruneLockID)
+	var total int64
+	for _, q := range []string{
+		`DELETE FROM status_log WHERE id IN (SELECT id FROM status_log WHERE at < now() - $1 * interval '1 second' LIMIT 5000)`,
+		`DELETE FROM inbox WHERE (consumer, message_id) IN (
+			SELECT consumer, message_id FROM inbox WHERE processed_at < now() - $1 * interval '1 second' LIMIT 5000)`,
+	} {
+		for {
+			tag, err := conn.Exec(ctx, q, retention.Seconds())
+			if err != nil {
+				return total, err
+			}
+			total += tag.RowsAffected()
+			if tag.RowsAffected() < 5000 {
+				break
+			}
+		}
+	}
+	return total, nil
+}

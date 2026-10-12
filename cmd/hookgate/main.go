@@ -47,7 +47,14 @@ func run(log *slog.Logger) error {
 	roles := worker.SplitList(getenv("ROLES", "api,relay,processor,sink"))
 	eventsTopic := getenv("EVENTS_TOPIC", "hookgate-events")
 
-	pool, err := pgxpool.New(ctx, getenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/hookgate?sslmode=disable"))
+	poolCfg, err := pgxpool.ParseConfig(getenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/hookgate?sslmode=disable"))
+	if err != nil {
+		return err
+	}
+	// pgx defaults to max(4, CPUs) connections, far fewer than the handlers a
+	// worker runs concurrently; size the pool for them.
+	poolCfg.MaxConns = int32(getint("DB_MAX_CONNS", 20))
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return err
 	}
@@ -72,6 +79,9 @@ func run(log *slog.Logger) error {
 			EventsTopic: eventsTopic, APIKey: os.Getenv("API_KEY"), Actor: worker.Producer + "/api",
 		}, log).Handler()
 	}
+	if slices.Contains(roles, "api") && os.Getenv("API_KEY") == "" {
+		log.Warn("API_KEY is not set: the admin API (/v1/*) is open to anyone who can reach it")
+	}
 	srv := &http.Server{Addr: getenv("ADDR", ":8080"), Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
@@ -87,6 +97,10 @@ func run(log *slog.Logger) error {
 				Lease:        30 * time.Second,
 			}, log)
 			wg.Go(func() { r.Run(ctx) })
+			if days := getint("RETENTION_DAYS", 14); os.Getenv("RETENTION_DAYS") != "0" {
+				j := &worker.Janitor{St: st, Retention: time.Duration(days) * 24 * time.Hour, Every: 10 * time.Minute, Log: log.With("role", "janitor")}
+				wg.Go(func() { j.Run(ctx) })
+			}
 		case "processor":
 			p := worker.NewProcessor(st, b, worker.ProcessorConfig{
 				EventsTopic:    eventsTopic,

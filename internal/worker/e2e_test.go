@@ -376,3 +376,17 @@ func countOf(s []string, v string) int {
 	}
 	return n
 }
+
+func TestPruneKeepsRecentRows(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	e.pool.Exec(ctx, `INSERT INTO status_log (ref_id, status, actor, at) VALUES (gen_random_uuid(), 'old', 'go/test', now() - interval '20 days'), (gen_random_uuid(), 'new', 'go/test', now())`)
+	e.pool.Exec(ctx, `INSERT INTO inbox (consumer, message_id, processed_at) VALUES ('c', 'old', now() - interval '20 days'), ('c', 'new', now())`)
+	n, err := e.st.Prune(ctx, 14*24*time.Hour)
+	if err != nil || n != 2 {
+		t.Fatalf("pruned %d rows, err %v; want 2", n, err)
+	}
+	if e.count(`SELECT count(*) FROM status_log WHERE status = 'new'`)+e.count(`SELECT count(*) FROM inbox WHERE message_id = 'new'`) != 2 {
+		t.Error("recent rows were pruned")
+	}
+}

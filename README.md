@@ -112,6 +112,10 @@ Event statuses are `received → queued → processed`, or `retrying → … →
 | `RELAY_BATCH`, `RELAY_POLL_MS` | `100`, `200` | |
 | `API_KEY` | empty | If set, `/v1/*` (except ingest) needs `Authorization: Bearer …`. |
 | `CHAOS_FAIL_TYPES` | empty | Event types that always fail, to demo retries and dead-lettering. |
+| `DB_MAX_CONNS` | `20` | Postgres pool size per process |
+| `RETENTION_DAYS` | `14` | How long timelines and inbox rows are kept (`0` = forever) |
+
+The **[operations guide](docs/operations.md)** covers sizing, monitoring and alerts, the runbook (dead events, outages, deploys) and a security checklist.
 
 ## Design notes
 
