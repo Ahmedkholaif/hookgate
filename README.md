@@ -6,7 +6,7 @@
 
 The goal is **exactly-once effects on an at-least-once pipeline.** Providers retry, brokers redeliver and workers crash mid-flight, and none of that produces a second message or a second side effect.
 
-A NestJS twin, **[hookgate-nest](https://github.com/Ahmedkholaif/hookgate-nest)**, serves the same API on the same schema and wire format. CI runs Go and NestJS workers against the same database and queues, and they behave as one system.
+Two TypeScript twins, **[hookgate-nest](https://github.com/Ahmedkholaif/hookgate-nest)** (NestJS) and **[hookgate-express](https://github.com/Ahmedkholaif/hookgate-express)** (plain Express), serve the same API on the same schema and wire format. CI runs Go, NestJS and Express workers against the same database and queues, and they behave as one system.
 
 ```mermaid
 flowchart LR
@@ -138,6 +138,7 @@ make test   # needs Postgres; see TEST_DATABASE_URL in the Makefile
 ## Related
 
 - [hookgate-nest](https://github.com/Ahmedkholaif/hookgate-nest): the same system in NestJS, interoperable with this one.
+- [hookgate-express](https://github.com/Ahmedkholaif/hookgate-express): the same system in plain Express, with a NestJS-to-Express mapping of every piece.
 - [hookline](https://github.com/Ahmedkholaif/hookline): the outbound side, reliable webhook delivery. [hookscope](https://github.com/Ahmedkholaif/hookscope): a live webhook inspector.
 
 MIT licensed.
